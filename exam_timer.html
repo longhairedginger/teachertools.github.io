@@ -1,0 +1,235 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Marks pacing timer</title>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Atkinson+Hyperlegible:wght@400;700&display=swap">
+<style>
+  :root {
+    --bg: #12263f;
+    --panel: #1b3556;
+    --ink: #f4f1e8;
+    --muted: #a9bad0;
+    --std: #ffc857;
+    --extra: #6fd6c8;
+    --line: #35557d;
+  }
+  * { box-sizing: border-box; }
+  html, body { height: 100%; margin: 0; }
+  body {
+    background: var(--bg);
+    color: var(--ink);
+    font-family: "Atkinson Hyperlegible", "Segoe UI", Arial, sans-serif;
+    display: flex;
+    flex-direction: column;
+    gap: 2vmin;
+    padding: 2.5vmin;
+    overflow: hidden;
+  }
+  .clock {
+    text-align: center;
+    font-size: clamp(2rem, 17vmin, 12rem);
+    line-height: 1;
+    font-weight: 700;
+    font-variant-numeric: tabular-nums;
+    letter-spacing: 0.02em;
+  }
+  .clock.paused { opacity: 0.7; }
+  .results {
+    flex: 1;
+    min-height: 0;
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 2vmin;
+  }
+  .card {
+    background: var(--panel);
+    border-radius: 14px;
+    border-top: 1.2vmin solid var(--c);
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    min-height: 0;
+    padding: 1vmin;
+  }
+  .card.std { --c: var(--std); }
+  .card.extra { --c: var(--extra); }
+  .label { font-size: clamp(0.9rem, 3.4vmin, 2rem); color: var(--muted); text-align: center; }
+  .marks {
+    color: var(--c);
+    font-size: clamp(3rem, 30vmin, 20rem);
+    line-height: 1;
+    font-weight: 700;
+    font-variant-numeric: tabular-nums;
+  }
+  .exact { font-size: clamp(0.9rem, 3.4vmin, 2rem); color: var(--muted); }
+  .controls {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 1.5vmin;
+    justify-content: center;
+    align-items: center;
+  }
+  button {
+    font: inherit;
+    font-weight: 700;
+    font-size: clamp(1rem, 4vmin, 2.2rem);
+    min-height: 56px;
+    padding: 0 3vmin;
+    border-radius: 12px;
+    border: 2px solid var(--line);
+    background: var(--panel);
+    color: var(--ink);
+    cursor: pointer;
+  }
+  button.primary { background: var(--std); color: #14243a; border-color: var(--std); min-width: 22vmin; }
+  button:focus-visible, input:focus-visible, summary:focus-visible { outline: 3px solid var(--extra); outline-offset: 2px; }
+  .field {
+    display: flex;
+    align-items: center;
+    gap: 0.8vmin;
+    font-size: clamp(0.9rem, 3.4vmin, 2rem);
+    color: var(--muted);
+  }
+  input {
+    font: inherit;
+    font-weight: 700;
+    width: 5.2ch;
+    min-height: 56px;
+    text-align: center;
+    font-size: clamp(1rem, 4vmin, 2.2rem);
+    background: var(--bg);
+    color: var(--ink);
+    border: 2px solid var(--line);
+    border-radius: 10px;
+  }
+  input:disabled { opacity: 0.5; }
+  details { text-align: center; color: var(--muted); font-size: clamp(0.85rem, 3vmin, 1.6rem); }
+  summary { cursor: pointer; display: inline-block; padding: 0.5vmin 2vmin; }
+  details .controls { margin-top: 1vmin; }
+  @media (max-width: 560px) {
+    .results { grid-template-columns: 1fr; }
+  }
+</style>
+</head>
+<body>
+  <div class="clock paused" id="clock" aria-live="off">00:00</div>
+
+  <div class="results">
+    <div class="card std">
+      <div class="label">Standard time</div>
+      <div class="marks" id="stdMarks">0</div>
+      <div class="exact" id="stdExact">marks (0.0)</div>
+    </div>
+    <div class="card extra">
+      <div class="label" id="extraLabel">With 25% extra time</div>
+      <div class="marks" id="extraMarks">0</div>
+      <div class="exact" id="extraExact">marks (0.0)</div>
+    </div>
+  </div>
+
+  <div class="controls">
+    <button class="primary" id="toggle">Start</button>
+    <button id="reset">Reset</button>
+    <div class="field">
+      Start at
+      <input id="startMin" type="number" min="0" max="999" value="0" inputmode="numeric" aria-label="Start minutes">min
+      <input id="startSec" type="number" min="0" max="59" value="0" inputmode="numeric" aria-label="Start seconds">sec
+    </div>
+  </div>
+
+  <details>
+    <summary>Settings</summary>
+    <div class="controls">
+      <div class="field">Minutes per mark
+        <input id="rate" type="number" min="0.1" step="0.1" value="1.5" aria-label="Minutes per mark">
+      </div>
+      <div class="field">Extra time %
+        <input id="extra" type="number" min="0" step="5" value="25" aria-label="Extra time percentage">
+      </div>
+    </div>
+  </details>
+
+<script>
+(function () {
+  var $ = function (id) { return document.getElementById(id); };
+  var elapsed = 0;        // ms accumulated while paused
+  var startedAt = null;   // timestamp when running, else null
+  var startValue = 0;     // ms the timer resets to
+  var raf = null;
+
+  function now() { return elapsed + (startedAt === null ? 0 : Date.now() - startedAt); }
+
+  function num(el, fallback) {
+    var v = parseFloat(el.value);
+    return isFinite(v) && v >= 0 ? v : fallback;
+  }
+
+  function fmt(ms) {
+    var s = Math.floor(ms / 1000);
+    var h = Math.floor(s / 3600), m = Math.floor((s % 3600) / 60), sec = s % 60;
+    var p = function (n) { return String(n).padStart(2, "0"); };
+    return h > 0 ? h + ":" + p(m) + ":" + p(sec) : p(m) + ":" + p(sec);
+  }
+
+  function render() {
+    var ms = now();
+    var minutes = ms / 60000;
+    var rate = Math.max(0.1, num($("rate"), 1.5));
+    var extraPct = num($("extra"), 25);
+    var std = minutes / rate;
+    var ext = minutes / (rate * (1 + extraPct / 100));
+
+    $("clock").textContent = fmt(ms);
+    $("clock").classList.toggle("paused", startedAt === null);
+    $("stdMarks").textContent = Math.floor(std + 1e-9);
+    $("stdExact").textContent = "marks (" + std.toFixed(1) + ")";
+    $("extraMarks").textContent = Math.floor(ext + 1e-9);
+    $("extraExact").textContent = "marks (" + ext.toFixed(1) + ")";
+    $("extraLabel").textContent = "With " + extraPct + "% extra time";
+  }
+
+  function loop() { render(); raf = requestAnimationFrame(loop); }
+
+  function setRunning(run) {
+    if (run && startedAt === null) {
+      startedAt = Date.now();
+      loop();
+    } else if (!run && startedAt !== null) {
+      elapsed = now();
+      startedAt = null;
+      cancelAnimationFrame(raf);
+    }
+    $("toggle").textContent = startedAt === null ? (now() > startValue ? "Resume" : "Start") : "Pause";
+    $("startMin").disabled = $("startSec").disabled = startedAt !== null;
+    render();
+  }
+
+  function applyStart() {
+    var m = Math.floor(num($("startMin"), 0));
+    var s = Math.min(59, Math.floor(num($("startSec"), 0)));
+    startValue = (m * 60 + s) * 1000;
+    elapsed = startValue;
+    setRunning(false);
+  }
+
+  $("toggle").addEventListener("click", function () { setRunning(startedAt === null); });
+  $("reset").addEventListener("click", function () { setRunning(false); elapsed = startValue; setRunning(false); });
+  $("startMin").addEventListener("change", applyStart);
+  $("startSec").addEventListener("change", applyStart);
+  $("rate").addEventListener("input", render);
+  $("extra").addEventListener("input", render);
+  document.addEventListener("keydown", function (e) {
+    if (e.code === "Space" && !/INPUT|BUTTON|SUMMARY/.test(e.target.tagName)) {
+      e.preventDefault();
+      setRunning(startedAt === null);
+    }
+  });
+
+  render();
+})();
+</script>
+</body>
+</html>
